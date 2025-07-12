@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow Blockchain Explorer</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #search { margin-bottom: 20px; }
+        #latest-blocks, #latest-transactions { margin-bottom: 20px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>Flow Blockchain Explorer</h1>
+    
+    <div id="search">
+        <input type="text" id="search-input" placeholder="Search by block height, tx ID, or account address">
+        <button onclick="performSearch()">Search</button>
+        <div id="search-result"></div>
+    </div>
+    
+    <h2>Latest Blocks</h2>
+    <div id="latest-blocks"></div>
+    
+    <h2>Latest Transactions</h2>
+    <div id="latest-transactions"></div>
+    
+    <script>
+        const BASE_URL = 'https://rest-mainnet.onflow.org/v1';
+
+        async function fetchData(endpoint) {
+            try {
+                const response = await fetch(`${BASE_URL}${endpoint}`);
+                if (!response.ok) throw new Error('Network response was not ok');
+                return await response.json();
+            } catch (error) {
+                console.error('Fetch error:', error);
+                return null;
+            }
+        }
+
+        async function getLatestBlockHeight() {
+            const data = await fetchData('/blocks?height=sealed');
+            if (data && data.length > 0) {
+                return parseInt(data[0].height);
+            }
+            return null;
+        }
+
+        async function displayLatestBlocks() {
+            const height = await getLatestBlockHeight();
+            if (!height) return;
+
+            const start = height - 9;
+            const data = await fetchData(`/blocks?start_height=${start}&end_height=${height}`);
+            if (!data) return;
+
+            let table = '<table><tr><th>Height</th><th>Block ID</th><th>Timestamp</th></tr>';
+            data.reverse().forEach(block => {
+                table += `<tr><td>${block.height}</td><td>${block.id}</td><td>${block.timestamp}</td></tr>`;
+            });
+            table += '</table>';
+            document.getElementById('latest-blocks').innerHTML = table;
+        }
+
+        async function displayLatestTransactions() {
+            const data = await fetchData('/blocks?height=sealed&expand=payload');
+            if (!data || data.length === 0) return;
+
+            const block = data[0];
+            const collections = block.payload.collection_guarantees || [];
+
+            let txList = [];
+            for (const coll of collections) {
+                const collData = await fetchData(`/collections/${coll.collection_id}`);
+                if (collData) {
+                    txList = txList.concat(collData.transaction_ids || []);
+                }
+            }
+
+            if (txList.length === 0) {
+                document.getElementById('latest-transactions').innerHTML = '<p>No recent transactions found.</p>';
+                return;
+            }
+
+            // Limit to 10 latest tx
+            txList = txList.slice(0, 10);
+
+            let table = '<table><tr><th>Transaction ID</th></tr>';
+            txList.forEach(txId => {
+                table += `<tr><td>${txId}</td></tr>`;
+            });
+            table += '</table>';
+            document.getElementById('latest-transactions').innerHTML = table;
+        }
+
+        async function performSearch() {
+            const query = document.getElementById('search-input').value.trim();
+            const resultDiv = document.getElementById('search-result');
+            resultDiv.innerHTML = '';
+
+            if (!query) return;
+
+            let data;
+            // Assume if numeric, it's block height
+            if (!isNaN(query)) {
+                data = await fetchData(`/blocks?height=${query}`);
+                if (data && data.length > 0) {
+                    const block = data[0];
+                    resultDiv.innerHTML = `<h3>Block ${block.height}</h3><p>ID: ${block.id}</p><p>Timestamp: ${block.timestamp}</p>`;
+                    return;
+                }
+            }
+
+            // Assume 64 hex chars for tx or block ID
+            if (/^[0-9a-fA-F]{64}$/.test(query)) {
+                // Try transaction
+                data = await fetchData(`/transactions/${query}`);
+                if (data) {
+                    resultDiv.innerHTML = `<h3>Transaction ${data.id}</h3><p>Script: ${data.script}</p><p>Gas Limit: ${data.gas_limit}</p>`;
+                    return;
+                }
+
+                // Try block ID
+                data = await fetchData(`/blocks/${query}`);
+                if (data && data.length > 0) {
+                    const block = data[0];
+                    resultDiv.innerHTML = `<h3>Block ${block.height}</h3><p>ID: ${block.id}</p><p>Timestamp: ${block.timestamp}</p>`;
+                    return;
+                }
+            }
+
+            // Assume account address (Flow addresses are 16 hex chars with 0x)
+            if (/^0x[0-9a-fA-F]{16}$/.test(query)) {
+                data = await fetchData(`/accounts/${query}`);
+                if (data) {
+                    resultDiv.innerHTML = `<h3>Account ${data.address}</h3><p>Balance: ${data.balance}</p><p>Keys: ${data.keys.length}</p>`;
+                    return;
+                }
+            }
+
+            resultDiv.innerHTML = '<p>No results found.</p>';
+        }
+
+        // Load initial data
+        displayLatestBlocks();
+        displayLatestTransactions();
+    </script>
+</body>
+</html>
